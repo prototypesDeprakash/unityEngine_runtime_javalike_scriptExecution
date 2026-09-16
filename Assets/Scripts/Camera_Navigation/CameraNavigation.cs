@@ -1,90 +1,87 @@
+
 using UnityEngine;
-using UnityEngine.EventSystems;
 
 public class CameraNavigation : MonoBehaviour
 {
-    [Header("References")]
-    public Camera cam;
+    [Header("Code Window")]
+    public RectTransform codeWindow;
 
-    [Header("Zoom")]
-    public float zoomSpeed = 10f;
-    public float minZoom = 3f;
-    public float maxZoom = 30f;
+    // How much the code window changes per key press
+    public float codeWindowZoomAmount = 0.03f;
 
-    [Header("Pan")]
-    public float panSpeed = 1f;
+    // How smoothly the code window reaches its target scale
+    public float codeWindowSmoothSpeed = 8f;
 
-    private Vector3 lastMousePosition;
-    private bool isPanning;
-    private float zoomLevel;
+    // Limits for the code window scale
+    public float minCodeWindowScale = 0.8f;
+    public float maxCodeWindowScale = 1.5f;
+
+    [Header("Code Window Scale Keys")]
+    public KeyCode scaleUpKey = KeyCode.Equals;
+    public KeyCode scaleDownKey = KeyCode.Minus;
+
+    private Vector3 originalCodeWindowScale;
+
+    private float targetCodeWindowScale = 1f;
+    private float currentCodeWindowScale = 1f;
 
     private void Awake()
     {
-        if (cam == null)
+        if (codeWindow != null)
         {
-            cam = Camera.main;
+            originalCodeWindowScale = codeWindow.localScale;
         }
-        zoomLevel = cam.orthographic ? cam.orthographicSize : Mathf.Abs(cam.transform.position.z);
     }
 
     private void Update()
     {
-        HandleZoom();
-        HandlePan();
+        HandleCodeWindowScaling();
+        SmoothCodeWindowScale();
     }
 
-    private bool IsMouseOverUI()
+    private void HandleCodeWindowScaling()
     {
-        return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
+        if (codeWindow == null)
+            return;
+
+        // Scale UP
+        if (Input.GetKeyDown(scaleUpKey))
+        {
+            targetCodeWindowScale += codeWindowZoomAmount;
+
+            targetCodeWindowScale = Mathf.Clamp(
+                targetCodeWindowScale,
+                minCodeWindowScale,
+                maxCodeWindowScale
+            );
+        }
+
+        // Scale DOWN
+        if (Input.GetKeyDown(scaleDownKey))
+        {
+            targetCodeWindowScale -= codeWindowZoomAmount;
+
+            targetCodeWindowScale = Mathf.Clamp(
+                targetCodeWindowScale,
+                minCodeWindowScale,
+                maxCodeWindowScale
+            );
+        }
     }
 
-    private void HandleZoom()
+    private void SmoothCodeWindowScale()
     {
-        if (IsMouseOverUI()) return;
+        if (codeWindow == null)
+            return;
 
-        float scroll = Input.GetAxis("Mouse ScrollWheel");
-        if (Mathf.Approximately(scroll, 0f)) return;
+        currentCodeWindowScale = Mathf.Lerp(
+            currentCodeWindowScale,
+            targetCodeWindowScale,
+            Time.deltaTime * codeWindowSmoothSpeed
+        );
 
-        zoomLevel = Mathf.Clamp(zoomLevel - scroll * zoomSpeed, minZoom, maxZoom);
-
-        if (cam.orthographic)
-        {
-            cam.orthographicSize = zoomLevel;
-        }
-        else
-        {
-            cam.transform.position += cam.transform.forward * scroll * zoomSpeed;
-        }
-    }
-
-    private void HandlePan()
-    {
-        if (Input.GetMouseButtonDown(2))
-        {
-            isPanning = true;
-            lastMousePosition = Input.mousePosition;
-        }
-
-        if (Input.GetMouseButtonUp(2))
-        {
-            isPanning = false;
-        }
-
-        if (!isPanning) return;
-
-        Vector3 delta = Input.mousePosition - lastMousePosition;
-        lastMousePosition = Input.mousePosition;
-
-        float speed = panSpeed * 0.01f;
-
-        // Move strictly along the camera's own screen-space axes: its right
-        // vector for left/right, its actual up vector (not flattened onto
-        // the ground plane) for up/down. This keeps panning purely lateral
-        // — no forward/backward drift into the scene, regardless of tilt.
-        Vector3 right = cam.transform.right;
-        Vector3 up = cam.transform.up;
-
-        Vector3 move = (-right * delta.x - up * delta.y) * speed;
-        cam.transform.position += move;
+        codeWindow.localScale =
+            originalCodeWindowScale * currentCodeWindowScale;
     }
 }
+

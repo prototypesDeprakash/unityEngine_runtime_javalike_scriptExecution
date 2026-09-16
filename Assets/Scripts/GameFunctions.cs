@@ -53,17 +53,20 @@ public class GameFunctions
 
                         case "South":
                             Debug.Log("PLAYER -> MOVE SOUTH");
+                            player.MoveDown();
                             // player.MoveSouth();
                             break;
 
                         case "East":
                             Debug.Log("PLAYER -> MOVE EAST");
+                            player.MoveRight();
                             // player.MoveEast();
                             break;
 
                         case "West":
                             Debug.Log("PLAYER -> MOVE WEST");
                             // player.MoveWest();
+                            player.MoveLeft();
                             break;
 
                         default:
@@ -97,7 +100,20 @@ public class GameFunctions
                 });
 
                 return true;
-
+            case "clear":
+                if (args.Length != 0)
+                {
+                    Debug.LogError(
+                        "clear() does not take arguments."
+                    );
+                    return true;
+                }
+                queueGameAction(() =>
+                {
+                    Debug.Log("PLAYER -> CLEAR POSITION");
+                    player.clear();
+                });
+                return true;
 
             default:
                 return false;
