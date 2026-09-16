@@ -4,28 +4,46 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using UnityEngine;
+using Antlr4.Runtime;
 public class GameInterpreter : SimpleBaseVisitor<object>
 {
     private readonly Player player;
     private readonly GameFunctions gameFunctions;
     private readonly ExecutionRunner executionRunner;
 
+    // Game actions produced while evaluating the CURRENT statement land
+    // here instead of a long-lived queue. They get executed and paced out
+    // (one WaitForSeconds each) immediately after that statement finishes,
+    // before the interpreter moves on - see FlushPendingActions.
+    private readonly List<Action> pendingActions = new();
+
     // Delay between game actions. This is the "internal clock" of the
     // programming game. Increase/decrease this to control execution speed.
     private const float DefaultStepDelay = 0.25f;
 
     /// <summary>
-    /// Executes queued game actions one at a time on Unity's main thread.
-    /// The interpreter itself remains synchronous, but game actions are
-    /// separated by Unity frames/time instead of happening in one frame.
+    /// Runs the interpreter's own program coroutine on Unity's main thread.
+    ///
+    /// IMPORTANT: this used to independently drain a queue of actions that
+    /// the interpreter filled up-front by tree-walking the whole script in
+    /// one frame. That's what made while-loops "run forever": the walk
+    /// evaluated the loop condition against state that hadn't changed yet
+    /// (the matching action was only queued, not yet executed), so it kept
+    /// re-queuing until it hit the 1,000,000-iteration safety cap, then
+    /// played all of that back at stepDelay seconds each.
+    ///
+    /// Now the interpreter itself is the coroutine: it performs an action
+    /// and waits for it before re-checking any condition, so loops see
+    /// up-to-date state and only ever run as many iterations as they should.
     /// </summary>
     private class ExecutionRunner : MonoBehaviour
     {
-        private readonly Queue<Action> actionQueue = new();
         private Coroutine executionCoroutine;
         private float stepDelay = DefaultStepDelay;
 
         public bool IsRunning => executionCoroutine != null;
+
+        public float StepDelay => stepDelay;
 
         public void Configure(float delay)
         {
@@ -34,8 +52,6 @@ public class GameInterpreter : SimpleBaseVisitor<object>
 
         public void Clear()
         {
-            actionQueue.Clear();
-
             if (executionCoroutine != null)
             {
                 StopCoroutine(executionCoroutine);
@@ -43,45 +59,19 @@ public class GameInterpreter : SimpleBaseVisitor<object>
             }
         }
 
-        public void Enqueue(Action action)
+        public void Run(IEnumerator routine)
         {
-            if (action == null)
-                return;
-
-            actionQueue.Enqueue(action);
+            Clear();
+            executionCoroutine = StartCoroutine(Drive(routine));
         }
 
-        public void StartExecution()
+        private IEnumerator Drive(IEnumerator routine)
         {
-            if (executionCoroutine == null)
-                executionCoroutine = StartCoroutine(ExecuteQueue());
-        }
-
-        private IEnumerator ExecuteQueue()
-        {
-            while (actionQueue.Count > 0)
-            {
-                Action action = actionQueue.Dequeue();
-
-                try
-                {
-                    // Execute exactly ONE game instruction.
-                    action?.Invoke();
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogException(ex);
-                }
-
-                // Give Unity time to render/update the result before the
-                // next instruction. This is what makes a loop visually
-                // execute step-by-step instead of instantly.
-                if (stepDelay > 0f)
-                    yield return new WaitForSeconds(stepDelay);
-                else
-                    yield return null;
-            }
-
+            // 'routine' (the interpreter's RunProgram) already fully
+            // drives everything beneath it and only ever yields plain
+            // WaitForSeconds/null values - see the "never yield a nested
+            // executor directly" note above ExecBlock.
+            yield return routine;
             executionCoroutine = null;
         }
     }
@@ -103,7 +93,7 @@ public class GameInterpreter : SimpleBaseVisitor<object>
             executionRunner = player.gameObject.AddComponent<ExecutionRunner>();
 
         executionRunner.Configure(DefaultStepDelay);
-        gameFunctions = new GameFunctions( player, QueueGameAction );
+        gameFunctions = new GameFunctions(player, QueueGameAction);
     }
 
     /// <summary>
@@ -214,8 +204,20 @@ public class GameInterpreter : SimpleBaseVisitor<object>
 
     public override object VisitProgram(SimpleParser.ProgramContext context)
     {
-        // Every Run starts with a clean execution queue.
-        executionRunner.Clear();
+        executionRunner.Run(RunProgram(context));
+        return null;
+    }
+
+    /// <summary>
+    /// The actual program driver. Registers functions synchronously (fast,
+    /// no game actions possible there), then executes every other
+    /// top-level item through the coroutine-aware Exec* methods so a
+    /// while/for/etc. only advances once its previous action has really
+    /// happened in-game.
+    /// </summary>
+    private IEnumerator RunProgram(SimpleParser.ProgramContext context)
+    {
+        pendingActions.Clear();
 
         // First pass: register all user-defined functions.
         foreach (var item in context.topLevelItem())
@@ -230,33 +232,61 @@ public class GameInterpreter : SimpleBaseVisitor<object>
             if (item.functionDeclaration() != null)
                 continue;
 
-            try
+            var exec = ExecTopLevelItem(item);
+
+            while (true)
             {
-                Visit(item);
-            }
-            catch (ReturnSignal)
-            {
-                Console.WriteLine("'return' used outside of a function.");
-            }
-            catch (BreakSignal)
-            {
-                Console.WriteLine("'break' used outside of a loop.");
-            }
-            catch (ContinueSignal)
-            {
-                Console.WriteLine("'continue' used outside of a loop.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Runtime error: {ex.Message}");
+                bool moved;
+
+                try
+                {
+                    moved = exec.MoveNext();
+                }
+                catch (ReturnSignal)
+                {
+                    Console.WriteLine("'return' used outside of a function.");
+                    break;
+                }
+                catch (BreakSignal)
+                {
+                    Console.WriteLine("'break' used outside of a loop.");
+                    break;
+                }
+                catch (ContinueSignal)
+                {
+                    Console.WriteLine("'continue' used outside of a loop.");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Runtime error: {ex.Message}");
+                    break;
+                }
+
+                if (!moved)
+                    break;
+
+                yield return exec.Current;
             }
         }
+    }
 
-        // Start the Unity-side execution only AFTER the whole program has
-        // been interpreted and its game actions have been queued.
-        executionRunner.StartExecution();
+    /// <summary>
+    /// Dispatches one top-level item to its coroutine-aware executor.
+    /// Mirrors ExecBlockItem below, minus functionDeclaration (handled
+    /// separately, up front, in RunProgram).
+    /// </summary>
+    private IEnumerator ExecTopLevelItem(SimpleParser.TopLevelItemContext context)
+    {
+        if (context.statement() != null) return ExecStatement(context.statement());
+        if (context.ifBlock() != null) return ExecIfBlock(context.ifBlock());
+        if (context.whileBlock() != null) return ExecWhileBlock(context.whileBlock());
+        if (context.forBlock() != null) return ExecForBlock(context.forBlock());
+        if (context.forEachBlock() != null) return ExecForEachBlock(context.forEachBlock());
+        if (context.doWhileBlock() != null) return ExecDoWhileBlock(context.doWhileBlock());
+        if (context.switchBlock() != null) return ExecSwitchBlock(context.switchBlock());
 
-        return null;
+        throw new Exception($"Unknown top-level item: {context.GetText()}");
     }
 
     public override object VisitTopLevelItem(SimpleParser.TopLevelItemContext context)
@@ -351,7 +381,42 @@ public class GameInterpreter : SimpleBaseVisitor<object>
 
     private void QueueGameAction(Action action)
     {
-        executionRunner.Enqueue(action);
+        if (action != null)
+            pendingActions.Add(action);
+    }
+
+    /// <summary>
+    /// Executes and paces out any game actions produced while evaluating
+    /// the statement just visited (e.g. a move() call), one at a time,
+    /// waiting stepDelay between each. Nothing to do 99% of the time -
+    /// most statements don't touch the game at all.
+    /// </summary>
+    private IEnumerator FlushPendingActions()
+    {
+        if (pendingActions.Count == 0)
+            yield break;
+
+        var actions = new List<Action>(pendingActions);
+        pendingActions.Clear();
+
+        float delay = executionRunner.StepDelay;
+
+        foreach (var action in actions)
+        {
+            try
+            {
+                action?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
+
+            if (delay > 0f)
+                yield return new WaitForSeconds(delay);
+            else
+                yield return null;
+        }
     }
 
     // ============================================
@@ -497,7 +562,409 @@ public class GameInterpreter : SimpleBaseVisitor<object>
     }
 
     // ============================================
-    // WHILE
+    // COROUTINE-AWARE STATEMENT EXECUTION (paced)
+    // ============================================
+    // Everything below runs the *top-level script* and *user functions
+    // called as their own statement* (the normal way to call a helper
+    // function in these scripts, e.g. "patrol();"). It mirrors the
+    // Visit* methods below almost exactly, except each one returns an
+    // IEnumerator instead of executing everything in one shot, so a
+    // while/for/etc. only re-checks its condition after its previous
+    // iteration's game action has actually happened.
+    //
+    // Rule used throughout: NEVER "yield return SomeExecutor(...)"
+    // directly - that just hands an un-started enumerator up the chain
+    // for someone else (eventually Unity itself) to resolve later, which
+    // means an exception thrown deep inside (break/continue/return) can
+    // no longer be caught by the try/catch here, because this method
+    // will have already returned by the time it actually runs. Instead,
+    // always create the child, manually pump its MoveNext() in a loop,
+    // and relay its Current - that's what makes break/continue/return
+    // catchable at the right level, and what guarantees only plain
+    // WaitForSeconds/null values ever bubble up to Unity.
+    //
+    // A function call used INSIDE a larger expression (e.g. "if
+    // (isDone())" or "x = compute(5)") still goes through the old
+    // synchronous CallUserFunction/Visit path further below - expression
+    // evaluation itself isn't coroutine-based. If such a function
+    // contains a while-loop full of game actions, that loop will still
+    // run instantly. Call action-heavy functions as bare statements, not
+    // from inside a condition, to get proper pacing.
+
+    private IEnumerator ExecBlock(SimpleParser.BlockContext context)
+    {
+        foreach (var item in context.blockItem())
+        {
+            var child = ExecBlockItem(item);
+
+            while (child.MoveNext())
+                yield return child.Current;
+        }
+    }
+
+    private IEnumerator ExecBlockItem(SimpleParser.BlockItemContext context)
+    {
+        if (context.statement() != null) return ExecStatement(context.statement());
+        if (context.ifBlock() != null) return ExecIfBlock(context.ifBlock());
+        if (context.whileBlock() != null) return ExecWhileBlock(context.whileBlock());
+        if (context.forBlock() != null) return ExecForBlock(context.forBlock());
+        if (context.forEachBlock() != null) return ExecForEachBlock(context.forEachBlock());
+        if (context.doWhileBlock() != null) return ExecDoWhileBlock(context.doWhileBlock());
+        if (context.switchBlock() != null) return ExecSwitchBlock(context.switchBlock());
+
+        throw new Exception($"Unknown block item: {context.GetText()}");
+    }
+
+    private IEnumerator ExecStatement(SimpleParser.StatementContext context)
+    {
+        if (context.expressionStatement() != null)
+        {
+            var exprStmt = context.expressionStatement();
+            var bareCall = AsBareFunctionCall(exprStmt.expression());
+
+            // A bare call to a USER-DEFINED function, e.g. "patrol();" -
+            // run its body through the paced executor too, so loops
+            // inside it are correctly paced.
+            if (bareCall != null &&
+                functions.TryGetValue(bareCall.ID().GetText(), out var userFunc))
+            {
+                object[] args = EvaluateArguments(bareCall.argumentList());
+                var call = CallUserFunctionPaced(userFunc, args);
+
+                while (call.MoveNext())
+                    yield return call.Current;
+            }
+            else
+            {
+                // Built-in calls, assignments, x++, etc. Any game action
+                // this produces lands in pendingActions; flush it before
+                // moving on to the next statement.
+                Visit(exprStmt.expression());
+
+                var flush = FlushPendingActions();
+                while (flush.MoveNext())
+                    yield return flush.Current;
+            }
+
+            yield break;
+        }
+
+        // print / variable declaration / return / break / continue never
+        // themselves produce game actions - run them synchronously.
+        // (return/break/continue throw here, which is fine: this happens
+        // on the very first MoveNext() of this method, so it propagates
+        // normally to whoever is driving us.)
+        Visit(context);
+    }
+
+    // True only when 'expr' is syntactically just a bare call like
+    // "foo(1, 2)" - i.e. every wrapping expression rule has exactly one
+    // child, all the way down to primaryExpression's functionCall.
+    private SimpleParser.FunctionCallContext AsBareFunctionCall(
+        SimpleParser.ExpressionContext expr)
+    {
+        RuleContext node = expr;
+
+        while (node != null && node.ChildCount == 1 && node.GetChild(0) is RuleContext next)
+            node = next;
+
+        return node as SimpleParser.FunctionCallContext;
+    }
+
+    // Paced counterpart to CallUserFunction, used when a user function is
+    // called as its own statement. Discards the return value (there's
+    // nowhere for it to go when the call isn't part of an expression).
+    private IEnumerator CallUserFunctionPaced(
+        SimpleParser.FunctionDeclarationContext function, object[] args)
+    {
+        var parameters = function.parameterList()?.parameter()
+            ?? Array.Empty<SimpleParser.ParameterContext>();
+
+        var frame = new Dictionary<string, object>();
+
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            string paramName = parameters[i].variableDeclaratorId().ID().GetText();
+            frame[paramName] = i < args.Length ? args[i] : null;
+        }
+
+        localStack.Add(frame);
+
+        try
+        {
+            var body = ExecBlock(function.block());
+
+            while (true)
+            {
+                bool moved;
+
+                try
+                {
+                    moved = body.MoveNext();
+                }
+                catch (ReturnSignal)
+                {
+                    yield break; // return value discarded - called as a statement
+                }
+
+                if (!moved)
+                    yield break;
+
+                yield return body.Current;
+            }
+        }
+        finally
+        {
+            localStack.RemoveAt(localStack.Count - 1);
+        }
+    }
+
+    private IEnumerator ExecIfBlock(SimpleParser.IfBlockContext context)
+    {
+        bool condition = Convert.ToBoolean(Visit(context.expression()));
+
+        if (condition)
+        {
+            var body = ExecBlock(context.block(0));
+            while (body.MoveNext())
+                yield return body.Current;
+
+            yield break;
+        }
+
+        if (context.ELSE() == null)
+            yield break;
+
+        if (context.ifBlock() != null)
+        {
+            var elseIf = ExecIfBlock(context.ifBlock());
+            while (elseIf.MoveNext())
+                yield return elseIf.Current;
+
+            yield break;
+        }
+
+        if (context.block().Length > 1)
+        {
+            var elseBody = ExecBlock(context.block(1));
+            while (elseBody.MoveNext())
+                yield return elseBody.Current;
+        }
+    }
+
+    private IEnumerator ExecWhileBlock(SimpleParser.WhileBlockContext context)
+    {
+        int safety = 0;
+
+        while (Convert.ToBoolean(Visit(context.expression())))
+        {
+            var body = ExecBlock(context.block());
+            bool broke = false;
+
+            while (true)
+            {
+                bool moved = false;
+                bool stop = false;
+
+                try { moved = body.MoveNext(); }
+                catch (BreakSignal) { broke = true; stop = true; }
+                catch (ContinueSignal) { stop = true; }
+
+                if (stop) break;
+                if (!moved) break;
+
+                yield return body.Current;
+            }
+
+            if (broke) break;
+
+            if (++safety > 1_000_000)
+            {
+                Console.WriteLine("Possible infinite loop.");
+                break;
+            }
+        }
+    }
+
+    private IEnumerator ExecForBlock(SimpleParser.ForBlockContext context)
+    {
+        if (context.forInit() != null)
+            Visit(context.forInit());
+
+        int safety = 0;
+
+        while (true)
+        {
+            if (context.expression() != null
+                && !Convert.ToBoolean(Visit(context.expression())))
+                break;
+
+            var body = ExecBlock(context.block());
+            bool broke = false;
+
+            while (true)
+            {
+                bool moved = false;
+                bool stop = false;
+
+                try { moved = body.MoveNext(); }
+                catch (BreakSignal) { broke = true; stop = true; }
+                catch (ContinueSignal) { stop = true; }
+
+                if (stop) break;
+                if (!moved) break;
+
+                yield return body.Current;
+            }
+
+            if (broke) break;
+
+            if (context.forUpdate() != null)
+                Visit(context.forUpdate());
+
+            if (++safety > 1_000_000)
+            {
+                Console.WriteLine("Possible infinite loop.");
+                break;
+            }
+        }
+    }
+
+    private IEnumerator ExecForEachBlock(SimpleParser.ForEachBlockContext context)
+    {
+        object collection = Visit(context.expression());
+
+        if (collection is not object[] items)
+        {
+            Console.WriteLine("for-each requires an array value.");
+            yield break;
+        }
+
+        string varName = context.ID().GetText();
+        int safety = 0;
+
+        foreach (var item in items)
+        {
+            DeclareVariable(varName, item);
+
+            var body = ExecBlock(context.block());
+            bool broke = false;
+
+            while (true)
+            {
+                bool moved = false;
+                bool stop = false;
+
+                try { moved = body.MoveNext(); }
+                catch (BreakSignal) { broke = true; stop = true; }
+                catch (ContinueSignal) { stop = true; }
+
+                if (stop) break;
+                if (!moved) break;
+
+                yield return body.Current;
+            }
+
+            if (broke) break;
+
+            if (++safety > 1_000_000)
+            {
+                Console.WriteLine("Possible infinite loop.");
+                break;
+            }
+        }
+    }
+
+    private IEnumerator ExecDoWhileBlock(SimpleParser.DoWhileBlockContext context)
+    {
+        int safety = 0;
+
+        do
+        {
+            var body = ExecBlock(context.block());
+            bool broke = false;
+
+            while (true)
+            {
+                bool moved = false;
+                bool stop = false;
+
+                try { moved = body.MoveNext(); }
+                catch (BreakSignal) { broke = true; stop = true; }
+                catch (ContinueSignal) { stop = true; }
+
+                if (stop) break;
+                if (!moved) break;
+
+                yield return body.Current;
+            }
+
+            if (broke) break;
+
+            if (++safety > 1_000_000)
+            {
+                Console.WriteLine("Possible infinite loop.");
+                break;
+            }
+        }
+        while (Convert.ToBoolean(Visit(context.expression())));
+    }
+
+    private IEnumerator ExecSwitchBlock(SimpleParser.SwitchBlockContext context)
+    {
+        object switchValue = Visit(context.expression());
+        bool matched = false;
+
+        var items = new List<SimpleParser.BlockItemContext>();
+
+        foreach (var switchCase in context.switchCase())
+        {
+            if (!matched)
+            {
+                object caseValue = switchCase.literal() != null
+                    ? Visit(switchCase.literal())
+                    : ReadQualifiedName(switchCase.qualifiedName());
+
+                if (!ValuesEqual(switchValue, caseValue))
+                    continue;
+
+                matched = true;
+            }
+
+            items.AddRange(switchCase.blockItem());
+        }
+
+        if (!matched && context.defaultCase() != null)
+            items.AddRange(context.defaultCase().blockItem());
+
+        foreach (var item in items)
+        {
+            var child = ExecBlockItem(item);
+            bool broke = false;
+
+            while (true)
+            {
+                bool moved = false;
+                bool stop = false;
+
+                try { moved = child.MoveNext(); }
+                catch (BreakSignal) { broke = true; stop = true; }
+
+                if (stop) break;
+                if (!moved) break;
+
+                yield return child.Current;
+            }
+
+            if (broke) yield break;
+        }
+    }
+
+    // ============================================
+    // WHILE (synchronous - only reached from CallUserFunction, for a
+    // function called from inside an expression rather than as its own
+    // statement; see the note at the top of the coroutine-aware section
+    // above)
     // ============================================
 
     public override object VisitWhileBlock(SimpleParser.WhileBlockContext context)
