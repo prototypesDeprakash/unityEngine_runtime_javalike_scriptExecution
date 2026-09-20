@@ -1,56 +1,62 @@
 using UnityEngine;
-using TMPro;
 
 public class minimize : MonoBehaviour
 {
-    private GameObject testArea;
+    private WindowEdgeResize window;
     private bool isMinimized;
+
+    private GameObject mainBackground;
+    private GameObject lineHighlight;
+    private GameObject linesBackground;
+    private GameObject inputField;
+    private GameObject scrollbar;
 
     private void Awake()
     {
-        // Find the window that THIS minimize button belongs to.
-        WindowEdgeResize window = GetComponentInParent<WindowEdgeResize>();
+        // Get the WindowEdgeResize that owns this minimize button
+        window = GetComponentInParent<WindowEdgeResize>();
 
-        if (window != null)
+        if (window == null)
         {
-            // Find ALL input fields inside THIS window.
-            TMP_InputField[] inputFields =
-                window.GetComponentsInChildren<TMP_InputField>(true);
-
-            // Use the SECOND input field.
-            if (inputFields.Length >= 2)
-            {
-                testArea = inputFields[0].gameObject;
-            }
-            else
-            {
-                Debug.LogWarning(
-                    $"{name}: fewer than 2 TMP_InputFields found under this window."
-                );
-            }
+            Debug.LogError($"{name}: WindowEdgeResize parent not found!");
+            return;
         }
 
-        if (testArea == null)
-        {
-            Debug.LogWarning(
-                $"{name}: couldn't find the second input field under this window."
-            );
-        }
+        // Find objects inside THIS window
+        mainBackground = FindChild("MainBackground");
+        lineHighlight = FindChild("LineHighlight");
+        linesBackground = FindChild("LinesBackground");
+        inputField = FindChild("InputField");
+        scrollbar = FindChild("Scrollbar");
+    }
+
+    private GameObject FindChild(string objectName)
+    {
+        Transform child = window.transform.Find(objectName);
+
+        if (child != null)
+            return child.gameObject;
+
+        Debug.LogWarning($"{name}: Could not find {objectName}");
+        return null;
     }
 
     public void MinimizeToggle()
     {
         isMinimized = !isMinimized;
 
-        if (testArea != null)
-        {
-            testArea.SetActive(!isMinimized);
-        }
+        SetActive(mainBackground, !isMinimized);
+        SetActive(lineHighlight, !isMinimized);
+        SetActive(linesBackground, !isMinimized);
+        SetActive(inputField, !isMinimized);
+        SetActive(scrollbar, !isMinimized);
 
-        Debug.Log(
-            isMinimized
-                ? "Second input field minimized"
-                : "Second input field restored"
-        );
+        Debug.Log(isMinimized ? "Window minimized" : "Window restored");
+    }
+
+    private void SetActive(GameObject obj, bool state)
+    {
+        if (obj != null)
+            obj.SetActive(state);
     }
 }

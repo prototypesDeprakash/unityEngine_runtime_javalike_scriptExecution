@@ -7,7 +7,7 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: GM-Grid-01-URP
+  m_Name: GM-Grid-01-URP 1
   m_Shader: {fileID: -6465566751694194690, guid: b4bb8b5c4862a416fa38d705dedc4d96, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
@@ -90,7 +90,7 @@ Material:
     - _Emission_Color: {r: 0, g: 0, b: 0, a: 0}
     - _Side_Color: {r: 0.1509434, g: 0, b: 0, a: 0}
     - _Side_Offset: {r: 0, g: 0, b: 0, a: 0}
-    - _Top_Color: {r: 0.7830189, g: 0.48474216, b: 0.15881987, a: 0}
+    - _Top_Color: {r: 0.4433962, g: 0.4433962, b: 0.4433962, a: 0}
     - _Top_Offset: {r: -0.02, g: -0.01, b: 0, a: 0}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

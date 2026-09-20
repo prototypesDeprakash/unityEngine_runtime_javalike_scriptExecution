@@ -57,10 +57,10 @@ Material:
     - _QueueControl: 0
     - _QueueOffset: 0
     - _Smoothness: 0
-    - _Tiling: 2
+    - _Tiling: 1
     m_Colors:
-    - _Base_Color: {r: 0, g: 0, b: 0, a: 0}
-    - _Emission_Color: {r: 0.0754717, g: 0.0754717, b: 0.0754717, a: 0}
+    - _Base_Color: {r: 0.9245283, g: 0, b: 0, a: 0}
+    - _Emission_Color: {r: 0.5849056, g: 0.5849056, b: 0.5849056, a: 0}
   m_BuildTextureStacks: []
   m_AllowLocking: 1
 --- !u!114 &3729133454598192734

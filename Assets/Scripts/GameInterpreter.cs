@@ -7,7 +7,7 @@ using UnityEngine;
 using Antlr4.Runtime;
 public class GameInterpreter : SimpleBaseVisitor<object>
 {
-    private readonly Player player;
+    private readonly ProgrammableAgent player;
     private readonly GameFunctions gameFunctions;
     private readonly ExecutionRunner executionRunner;
 
@@ -15,7 +15,9 @@ public class GameInterpreter : SimpleBaseVisitor<object>
     // here instead of a long-lived queue. They get executed and paced out
     // (one WaitForSeconds each) immediately after that statement finishes,
     // before the interpreter moves on - see FlushPendingActions.
-    private readonly List<Action> pendingActions = new();
+    // Each entry runs a game action and returns how many seconds the script
+    // should wait afterwards. Return <= 0 to use the normal step delay.
+    private readonly List<Func<float>> pendingActions = new();
 
     // Delay between game actions. This is the "internal clock" of the
     // programming game. Increase/decrease this to control execution speed.
@@ -36,12 +38,23 @@ public class GameInterpreter : SimpleBaseVisitor<object>
     /// and waits for it before re-checking any condition, so loops see
     /// up-to-date state and only ever run as many iterations as they should.
     /// </summary>
-    private class ExecutionRunner : MonoBehaviour
+    // Was 'private' - now 'public' so Player (and CodeExecutor, via Player)
+    // can fetch this component directly with GetComponent<GameInterpreter.ExecutionRunner>()
+    // and stop it, instead of going through a cached GameInterpreter/CodeExecutor
+    // reference that can go stale or point at the wrong instance.
+    public class ExecutionRunner : MonoBehaviour
     {
         private Coroutine executionCoroutine;
         private float stepDelay = DefaultStepDelay;
 
-        public bool IsRunning => executionCoroutine != null;
+        // Bumped on every Clear()/Run(). Each Drive() coroutine remembers
+        // the id it started with and quits the moment it no longer matches,
+        // so an old run can never keep stepping after it has been stopped
+        // or replaced - no matter how Unity handles StopCoroutine.
+        private int runId;
+        private bool isRunning;
+
+        public bool IsRunning => isRunning;
 
         public float StepDelay => stepDelay;
 
@@ -52,6 +65,9 @@ public class GameInterpreter : SimpleBaseVisitor<object>
 
         public void Clear()
         {
+            runId++;          // invalidates whatever Drive() is in flight
+            isRunning = false;
+
             if (executionCoroutine != null)
             {
                 StopCoroutine(executionCoroutine);
@@ -61,23 +77,56 @@ public class GameInterpreter : SimpleBaseVisitor<object>
 
         public void Run(IEnumerator routine)
         {
-            Clear();
-            executionCoroutine = StartCoroutine(Drive(routine));
+            Clear(); // always kill the previous run first
+
+            int myRun = runId;
+            isRunning = true;
+            executionCoroutine = StartCoroutine(Drive(routine, myRun));
         }
 
-        private IEnumerator Drive(IEnumerator routine)
+        // Pumps 'routine' by hand instead of "yield return routine".
+        // Yielding an IEnumerator makes Unity spin up a nested coroutine
+        // that StopCoroutine(parent) does not reliably stop - the old
+        // script kept running as an orphan. Pumping it here keeps the
+        // whole run inside ONE coroutine that Clear() can actually stop.
+        private IEnumerator Drive(IEnumerator routine, int myRun)
         {
-            // 'routine' (the interpreter's RunProgram) already fully
-            // drives everything beneath it and only ever yields plain
-            // WaitForSeconds/null values - see the "never yield a nested
-            // executor directly" note above ExecBlock.
-            yield return routine;
-            executionCoroutine = null;
+            while (myRun == runId)
+            {
+                bool moved;
+
+                try
+                {
+                    moved = routine.MoveNext();
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogException(ex);
+                    break;
+                }
+
+                if (!moved)
+                    break;
+
+                yield return routine.Current;
+            }
+
+            // Only the run that is still current may mark itself finished.
+            if (myRun == runId)
+            {
+                isRunning = false;
+                executionCoroutine = null;
+            }
+        }
+
+        private void OnDisable()
+        {
+            Clear();
         }
     }
 
 
-    public GameInterpreter(Player player)
+    public GameInterpreter(ProgrammableAgent player)
     {
         this.player = player;
 
@@ -93,7 +142,7 @@ public class GameInterpreter : SimpleBaseVisitor<object>
             executionRunner = player.gameObject.AddComponent<ExecutionRunner>();
 
         executionRunner.Configure(DefaultStepDelay);
-        gameFunctions = new GameFunctions(player, QueueGameAction);
+        gameFunctions = new GameFunctions(player, QueueGameAction, QueueTimedAction);
     }
 
     /// <summary>
@@ -379,7 +428,22 @@ public class GameInterpreter : SimpleBaseVisitor<object>
         return gameFunctions.Execute(functionName, args, out result);
     }
 
+    // Normal instant action - script waits the regular step delay after it.
     private void QueueGameAction(Action action)
+    {
+        if (action == null)
+            return;
+
+        pendingActions.Add(() =>
+        {
+            action();
+            return -1f;
+        });
+    }
+
+    // Timed action - the action runs, returns how long it takes (seconds),
+    // and the script pauses that long before the next statement.
+    private void QueueTimedAction(Func<float> action)
     {
         if (action != null)
             pendingActions.Add(action);
@@ -396,24 +460,29 @@ public class GameInterpreter : SimpleBaseVisitor<object>
         if (pendingActions.Count == 0)
             yield break;
 
-        var actions = new List<Action>(pendingActions);
+        var actions = new List<Func<float>>(pendingActions);
         pendingActions.Clear();
 
-        float delay = executionRunner.StepDelay;
+        float stepDelay = executionRunner.StepDelay;
 
         foreach (var action in actions)
         {
+            float duration = -1f;
+
             try
             {
-                action?.Invoke();
+                duration = action();
             }
             catch (Exception ex)
             {
                 Debug.LogException(ex);
             }
 
-            if (delay > 0f)
-                yield return new WaitForSeconds(delay);
+            // The action's own duration replaces the step delay.
+            float wait = duration > 0f ? duration : stepDelay;
+
+            if (wait > 0f)
+                yield return new WaitForSeconds(wait);
             else
                 yield return null;
         }

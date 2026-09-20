@@ -1,36 +1,44 @@
-using System.Collections;
 using UnityEngine;
-using Antlr4.Runtime;
+using System.Collections;
 
+using Antlr4.Runtime;
 public class CodeExecutor : MonoBehaviour
 {
     private CodeReader codeReader;
     private Coroutine executionCoroutine;
+    private GameInterpreter interpreter;
+
+    // Which agent this window controls. Set by AgentManager.Bind(...)
+    // (or in the Inspector if you prefer, for a fixed window).
+    [SerializeField] private ProgrammableAgent target;
+    public ProgrammableAgent Target => target;
 
     private void Awake()
     {
         codeReader = GetComponent<CodeReader>();
-
         if (codeReader == null)
-        {
             Debug.LogError("CodeReader not found.");
-        }
+    }
+
+    public void Bind(ProgrammableAgent agent)
+    {
+        StopExecution();   // never leave a run going on the old target
+        target = agent;
     }
 
     public void Execute()
     {
-        if (codeReader == null)
-            return;
+        if (codeReader == null) return;
 
-        // Don't allow two programs to run at the same time.
-        if (executionCoroutine != null)
+        if (target == null)
         {
-            StopCoroutine(executionCoroutine);
-            executionCoroutine = null;
+            Debug.LogError(name + ": no agent bound to this window.");
+            return;
         }
 
-        string code = codeReader.GetCode();
+        StopExecution();
 
+        string code = codeReader.GetCode();
         if (string.IsNullOrWhiteSpace(code))
         {
             Debug.Log("No code to execute.");
@@ -42,59 +50,23 @@ public class CodeExecutor : MonoBehaviour
 
     private IEnumerator ExecuteProgram(string code)
     {
-        // =========================
-        // ANTLR INPUT
-        // =========================
-
         AntlrInputStream input = new AntlrInputStream(code);
         SimpleLexer lexer = new SimpleLexer(input);
         CommonTokenStream tokens = new CommonTokenStream(lexer);
         SimpleParser parser = new SimpleParser(tokens);
         SimpleParser.ProgramContext tree = parser.program();
 
-        // =========================
-        // PARSER ERRORS
-        // =========================
-
         if (parser.NumberOfSyntaxErrors > 0)
         {
-            Debug.LogError(
-                $"Program has {parser.NumberOfSyntaxErrors} syntax error(s)."
-            );
-
+            Debug.LogError($"Program has {parser.NumberOfSyntaxErrors} syntax error(s).");
             executionCoroutine = null;
             yield break;
         }
-
-        // =========================
-        // PLAYER
-        // =========================
-
-        Player player = FindFirstObjectByType<Player>();
-
-        if (player == null)
-        {
-            Debug.LogError("Player not found in the scene.");
-            executionCoroutine = null;
-            yield break;
-        }
-
-        // =========================
-        // INTERPRETER
-        // =========================
-
-        GameInterpreter interpreter;
 
         try
         {
-            interpreter = new GameInterpreter(player);
-
-            // Change this value to control the delay between game actions.
-            // 0.25 = one action every quarter second.
+            interpreter = new GameInterpreter(target);
             interpreter.SetExecutionSpeed(0.25f);
-
-            // VisitProgram registers functions and interprets the program.
-            // Game actions such as move() are queued by the interpreter.
             interpreter.Visit(tree);
         }
         catch (System.Exception ex)
@@ -104,19 +76,10 @@ public class CodeExecutor : MonoBehaviour
             yield break;
         }
 
-        // =========================
-        // WAIT FOR QUEUED ACTIONS
-        // =========================
-
-        // The interpreter has already queued the game actions.
-        // ExecutionRunner executes them one at a time on Unity's main thread.
-        while (interpreter.IsExecuting)
-        {
+        while (interpreter != null && interpreter.IsExecuting)
             yield return null;
-        }
 
         executionCoroutine = null;
-
         Debug.Log("Program finished.");
     }
 
@@ -128,17 +91,16 @@ public class CodeExecutor : MonoBehaviour
             executionCoroutine = null;
         }
 
-        // Find the player and stop any queued interpreter actions as well.
-        Player player = FindFirstObjectByType<Player>();
-
-        if (player != null)
+        if (interpreter != null)
         {
-            // The interpreter owns the runner. If your UI needs a hard-stop
-            // button, keeping the interpreter reference as a field is even
-            // better; this fallback simply stops the executor coroutine.
-            // A new Execute() will create/configure a fresh interpreter and
-            // clear the previous queue.
+            interpreter.StopExecution();
+            interpreter = null;
         }
+
+        // Only THIS window's agent - other drones keep running.
+        // Explicit null check on purpose (Unity's overloaded ==).
+        if (target != null)
+            target.StopScript();
 
         Debug.Log("Program stopped.");
     }
