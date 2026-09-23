@@ -100,19 +100,23 @@ public class RecipeBook : MonoBehaviour
     }
 
     // --------------------------------------------------
-    // CRAFTING: consumes the ingredients and adds ONE output.
-    // 'at' is the station the player is standing on.
+    // CRAFTING: consumes the ingredients from 'inventory' (the agent's
+    // BACKPACK) and adds ONE output to it. 'at' is the station the agent
+    // is standing on. If the output doesn't fit, nothing is changed.
     // --------------------------------------------------
 
     public bool TryCraft(
         Inventory inventory,
         ItemType output,
         StationType at,
-        bool ignoreStation = false)
+        bool ignoreStation = false,
+        string who = "")
     {
+        string p = string.IsNullOrEmpty(who) ? "" : who + ": ";
+
         if (!TryGetRecipe(output, out Recipe recipe))
         {
-            Debug.LogWarning("No recipe for " + output);
+            GameLog.Warn(p + "no recipe for " + output.DisplayName() + ".");
             return false;
         }
 
@@ -120,23 +124,43 @@ public class RecipeBook : MonoBehaviour
             recipe.station != StationType.None &&
             recipe.station != at)
         {
-            Debug.LogWarning($"{output.DisplayName()} needs a {recipe.station} station (standing on {at}).");
+            GameLog.Warn($"{p}{output.DisplayName()} must be made on a {recipe.station} cell (standing on {at}).");
             return false;
         }
 
         foreach (ItemStack ing in recipe.ingredients)
         {
-            if (!inventory.Has(ing.item, ing.count))
+            if (inventory.Has(ing.item, ing.count))
+                continue;
+
+            if (inventory.MaxPerItem > 0 && ing.count > inventory.MaxPerItem)
             {
-                Debug.LogWarning($"Can't make {output.DisplayName()}: missing {ing.item.DisplayName()}.");
-                return false;
+                GameLog.Warn($"{p}{output.DisplayName()} needs {ing.count} {ing.item.DisplayName()}, " +
+                             $"but a backpack holds at most {inventory.MaxPerItem} of one item.");
             }
+            else
+            {
+                GameLog.Warn($"{p}can't make {output.DisplayName()}: carrying {inventory.Get(ing.item)}/{ing.count} " +
+                             $"{ing.item.DisplayName()}. Grab more from Storage.");
+            }
+
+            return false;
         }
 
         foreach (ItemStack ing in recipe.ingredients)
             inventory.TryRemove(ing.item, ing.count);
 
-        inventory.Add(output, 1);
+        if (!inventory.Add(output, 1))
+        {
+            // Didn't fit: put the ingredients back.
+            foreach (ItemStack ing in recipe.ingredients)
+                inventory.Add(ing.item, ing.count);
+
+            GameLog.Warn($"{p}backpack is full - can't hold another {output.DisplayName()}.");
+            return false;
+        }
+
+        GameLog.Info($"{p}made {output.DisplayName()}.");
         return true;
     }
 

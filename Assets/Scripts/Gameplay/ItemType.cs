@@ -29,6 +29,9 @@ public enum ItemType
     Fries = 15,
     Soup = 16,
     EggRice = 17,
+
+    // Farmed (appended at the end - do not renumber the items above)
+    Wheat = 18,
 }
 
 [Serializable]
@@ -52,6 +55,7 @@ public static class ItemLists
         ItemType.Tomato, ItemType.Onion, ItemType.Potato, ItemType.Carrot,
         ItemType.Meat, ItemType.Bread, ItemType.Cheese, ItemType.Egg, ItemType.Rice,
         ItemType.CookedMeat, ItemType.BoiledEgg, ItemType.GrilledTomato, ItemType.CookedRice,
+        ItemType.Wheat,
     };
 }
 

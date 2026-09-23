@@ -13,6 +13,8 @@ public class WorldGridEditor : Editor
         Cooking,
         Washing,
         Serving,
+        Storage,
+        Farmland,
         Eraser
     }
 
@@ -116,6 +118,8 @@ public class WorldGridEditor : Editor
             case Brush.Cooking: station = StationType.Cooking; return true;
             case Brush.Washing: station = StationType.Washing; return true;
             case Brush.Serving: station = StationType.Serving; return true;
+            case Brush.Storage: station = StationType.Storage; return true;
+            case Brush.Farmland:station = StationType.Farmland; return true;
             default: station = StationType.None; return false;
         }
     }

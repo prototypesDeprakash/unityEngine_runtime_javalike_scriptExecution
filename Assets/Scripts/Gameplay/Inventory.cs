@@ -3,19 +3,30 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Item counts. Starting amounts are set in the Inspector; everything else
-/// (add_potato(3), crafting, serving) goes through the methods below.
+/// A container of items. It is used in two roles:
+///   STORAGE  - the kitchen's stock (one, in the scene, no limits).
+///   BACKPACK - what one agent carries (one per Player/Drone, limits set by the agent).
+/// Limits: 0 means unlimited.
 /// </summary>
 public class Inventory : MonoBehaviour
 {
     [Header("Starting items (set counts here)")]
     [SerializeField] private List<ItemStack> startingItems = new List<ItemStack>();
 
+    [Header("Limits (0 = unlimited)")]
+    [Tooltip("Most of any single item this container can hold.")]
+    [SerializeField] private int maxPerItem = 0;
+    [Tooltip("Most items of all kinds together.")]
+    [SerializeField] private int maxTotal = 0;
+
     private readonly Dictionary<ItemType, int> counts = new Dictionary<ItemType, int>();
     private bool initialised;
 
     // Fired after any change. UI listens to this.
     public event Action Changed;
+
+    public int MaxPerItem => maxPerItem;
+    public int MaxTotal => maxTotal;
 
     private void Reset()
     {
@@ -42,8 +53,16 @@ public class Inventory : MonoBehaviour
         }
     }
 
+    // Used by agents to configure their backpack.
+    public void SetLimits(int perItem, int total)
+    {
+        maxPerItem = Mathf.Max(0, perItem);
+        maxTotal = Mathf.Max(0, total);
+        Changed?.Invoke();
+    }
+
     // --------------------------------------------------
-    // CORE
+    // READING
     // --------------------------------------------------
 
     public int Get(ItemType item)
@@ -57,18 +76,55 @@ public class Inventory : MonoBehaviour
         return Get(item) >= count;
     }
 
-    public void Add(ItemType item, int count = 1)
+    public int Total
     {
-        if (item == ItemType.None) return;
+        get
+        {
+            EnsureInit();
+
+            int sum = 0;
+            foreach (int n in counts.Values)
+                sum += n;
+
+            return sum;
+        }
+    }
+
+    // How many more of this item fit right now (int.MaxValue if unlimited).
+    public int SpaceFor(ItemType item)
+    {
+        int space = int.MaxValue;
+
+        if (maxPerItem > 0)
+            space = Mathf.Min(space, maxPerItem - Get(item));
+
+        if (maxTotal > 0)
+            space = Mathf.Min(space, maxTotal - Total);
+
+        return Mathf.Max(0, space);
+    }
+
+    // --------------------------------------------------
+    // CHANGING
+    // --------------------------------------------------
+
+    // All-or-nothing: returns false (and changes nothing) if it doesn't fit.
+    public bool Add(ItemType item, int count = 1)
+    {
+        if (item == ItemType.None) return false;
 
         if (count <= 0)
         {
             Debug.LogWarning($"Add({item}, {count}): count must be positive.");
-            return;
+            return false;
         }
+
+        if (count > SpaceFor(item))
+            return false;
 
         counts[item] = Get(item) + count;
         Changed?.Invoke();
+        return true;
     }
 
     public bool TryRemove(ItemType item, int count = 1)
@@ -85,17 +141,17 @@ public class Inventory : MonoBehaviour
     // NAMED ADDERS - call these from your own logic later.
     // --------------------------------------------------
 
-    public void add_tomato(int count)        => Add(ItemType.Tomato, count);
-    public void add_onion(int count)         => Add(ItemType.Onion, count);
-    public void add_potato(int count)        => Add(ItemType.Potato, count);
-    public void add_carrot(int count)        => Add(ItemType.Carrot, count);
-    public void add_meat(int count)          => Add(ItemType.Meat, count);
-    public void add_bread(int count)         => Add(ItemType.Bread, count);
-    public void add_cheese(int count)        => Add(ItemType.Cheese, count);
-    public void add_egg(int count)           => Add(ItemType.Egg, count);
-    public void add_rice(int count)          => Add(ItemType.Rice, count);
-    public void add_cooked_meat(int count)   => Add(ItemType.CookedMeat, count);
-    public void add_boiled_egg(int count)    => Add(ItemType.BoiledEgg, count);
+    public void add_tomato(int count) => Add(ItemType.Tomato, count);
+    public void add_onion(int count) => Add(ItemType.Onion, count);
+    public void add_potato(int count) => Add(ItemType.Potato, count);
+    public void add_carrot(int count) => Add(ItemType.Carrot, count);
+    public void add_meat(int count) => Add(ItemType.Meat, count);
+    public void add_bread(int count) => Add(ItemType.Bread, count);
+    public void add_cheese(int count) => Add(ItemType.Cheese, count);
+    public void add_egg(int count) => Add(ItemType.Egg, count);
+    public void add_rice(int count) => Add(ItemType.Rice, count);
+    public void add_cooked_meat(int count) => Add(ItemType.CookedMeat, count);
+    public void add_boiled_egg(int count) => Add(ItemType.BoiledEgg, count);
     public void add_grilled_tomato(int count) => Add(ItemType.GrilledTomato, count);
-    public void add_cooked_rice(int count)   => Add(ItemType.CookedRice, count);
+    public void add_cooked_rice(int count) => Add(ItemType.CookedRice, count);
 }

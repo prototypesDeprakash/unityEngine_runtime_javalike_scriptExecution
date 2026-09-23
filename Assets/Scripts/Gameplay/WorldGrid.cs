@@ -6,7 +6,9 @@ public enum StationType
     None,
     Cooking,
     Washing,
-    Serving
+    Serving,
+    Storage,
+    Farmland
 }
 
 [System.Serializable]
@@ -233,6 +235,8 @@ public class WorldGrid : MonoBehaviour
             case StationType.Cooking: return new Color(1f, 0.55f, 0f);
             case StationType.Washing: return Color.cyan;
             case StationType.Serving: return Color.yellow;
+            case StationType.Storage: return  new Color(0.7f, 0.4f, 1f);
+            case StationType.Farmland: return new Color(0.4f, 0.8f, 0.3f);
             default: return Color.white;
         }
     }

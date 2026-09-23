@@ -4,8 +4,9 @@ using TMPro;
 using UnityEngine;
 
 /// <summary>
-/// Shows the current order, its full recipe steps, and the raw ingredients
-/// needed (red = not enough in the inventory).
+/// Shows the current order and the full plan, starting with what to grab from
+/// Storage. The "needs" line shows the raw ingredients and how many are in
+/// STORAGE (red = storage doesn't have enough).
 /// </summary>
 public class OrderUI : MonoBehaviour
 {
@@ -28,8 +29,8 @@ public class OrderUI : MonoBehaviour
         orders.OrderPlaced += OnOrderEvent;
         orders.OrderCompleted += OnOrderEvent;
 
-        if (orders.Inventory != null)
-            orders.Inventory.Changed += Refresh;
+        if (orders.Storage != null)
+            orders.Storage.Changed += Refresh;
 
         Refresh();
     }
@@ -41,8 +42,8 @@ public class OrderUI : MonoBehaviour
         orders.OrderPlaced -= OnOrderEvent;
         orders.OrderCompleted -= OnOrderEvent;
 
-        if (orders.Inventory != null)
-            orders.Inventory.Changed -= Refresh;
+        if (orders.Storage != null)
+            orders.Storage.Changed -= Refresh;
     }
 
     private void OnOrderEvent(ItemType _) => Refresh();
@@ -68,6 +69,13 @@ public class OrderUI : MonoBehaviour
         StringBuilder sb = new StringBuilder();
         int n = 1;
 
+        // Step 1 is always: fetch the raw ingredients from Storage.
+        List<string> grabParts = new List<string>();
+        foreach (var kv in raw)
+            grabParts.Add(Format(kv.Key, kv.Value));
+
+        sb.AppendLine(n++ + ". Grab " + string.Join(", ", grabParts) + "  [" + StationType.Storage + "]");
+
         foreach (RecipeStep s in steps)
             sb.AppendLine(n++ + ". " + Describe(s));
 
@@ -81,13 +89,13 @@ public class OrderUI : MonoBehaviour
 
             foreach (var kv in raw)
             {
-                int have = orders.Inventory.Get(kv.Key);
-                string color = have >= kv.Value ? "#7CFC7C" : "#FF5555";
+                int inStorage = orders.Storage.Get(kv.Key);
+                string color = inStorage >= kv.Value ? "#7CFC7C" : "#FF5555";
 
                 if (!first) need.Append(",  ");
                 first = false;
 
-                need.Append($"<color={color}>{kv.Key.DisplayName()} {have}/{kv.Value}</color>");
+                need.Append($"<color={color}>{kv.Key.DisplayName()} x{kv.Value} (storage {inStorage})</color>");
             }
 
             needsText.text = need.ToString();

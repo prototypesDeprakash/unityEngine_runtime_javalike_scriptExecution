@@ -12,8 +12,7 @@ Material:
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
-  m_InvalidKeywords:
-  - _BLEND_MODE_ADD
+  m_InvalidKeywords: []
   m_LightmapFlags: 2
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
@@ -37,6 +36,14 @@ Material:
         m_Texture: {fileID: 2800000, guid: 9e6fac66bca70491d95b4f6bd77af0ae, type: 3}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
+    - _Side_Texture:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _Top_Texture:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     - unity_Lightmaps:
         m_Texture: {fileID: 0}
         m_Scale: {x: 1, y: 1}
@@ -52,15 +59,28 @@ Material:
     m_Ints: []
     m_Floats:
     - _BLEND_MODE: 0
+    - _Blend_Opacity: 1
+    - _COORDINATES: 0
+    - _Dirt: 0
+    - _Dirt_Blend: 0.5
+    - _Dirt_Height: 0.5
+    - _Edge_Sharpness: 50
     - _Emission: 0
+    - _Emission_Tiling: 1
     - _Metallic: 0.3
+    - _Metallic_Tiling: 1
     - _QueueControl: 0
     - _QueueOffset: 0
     - _Smoothness: 0
     - _Tiling: 2
     m_Colors:
     - _Base_Color: {r: 0.12967247, g: 0.4986872, b: 0.5849056, a: 1}
+    - _Dirt_Color: {r: 0.18592346, g: 0.07008722, b: 0.33018863, a: 0}
     - _Emission_Color: {r: 0, g: 0, b: 0, a: 0}
+    - _Side_Color: {r: 0.47450978, g: 0.47450978, b: 0.47450978, a: 0}
+    - _Side_Offset: {r: 0, g: 0, b: 0, a: 0}
+    - _Top_Color: {r: 0.4716981, g: 0.4716981, b: 0.4716981, a: 0}
+    - _Top_Offset: {r: 0, g: 0, b: 0, a: 0}
   m_BuildTextureStacks: []
   m_AllowLocking: 1
 --- !u!114 &3729133454598192734

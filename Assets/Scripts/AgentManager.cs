@@ -13,6 +13,7 @@ public class AgentManager : MonoBehaviour
     [Header("Scene")]
     [SerializeField] private Player player;
     [SerializeField] private CodeExecutor playerExecutor;   // the existing player window
+    [SerializeField] private CarriedItemsUI playerCarriedUI; // optional: shows what the Player carries
 
     [Header("Prefabs")]
     [SerializeField] private Drone dronePrefab;
@@ -38,6 +39,9 @@ public class AgentManager : MonoBehaviour
     private void Start()
     {
         playerExecutor.Bind(player);
+
+        if (playerCarriedUI != null)
+            playerCarriedUI.Bind(player.Backpack);
     }
 
     // For UI Buttons - OnClick only lists void methods.
@@ -83,6 +87,11 @@ public class AgentManager : MonoBehaviour
         // Run button and Stop button each have their own CodeExecutor - bind all of them.
         foreach (CodeExecutor e in executors)
             e.Bind(drone);
+
+        // Show what this drone carries inside its own window (optional).
+        CarriedItemsUI carried = window.GetComponentInChildren<CarriedItemsUI>(true);
+        if (carried != null)
+            carried.Bind(drone.Backpack);
 
         slots.Add(new Slot { drone = drone, executor = executors[0], window = window });
         return true;

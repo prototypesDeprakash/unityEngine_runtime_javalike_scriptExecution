@@ -2,15 +2,17 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 /// <summary>
-/// Runs the order loop: place an order -> player makes it -> player serves it
-/// -> short pause -> next order.
+/// Runs the order loop: place an order -> agents fetch ingredients from
+/// STORAGE, make the dish in their BACKPACK -> serve it -> short pause -> next order.
 /// </summary>
 public class OrderManager : MonoBehaviour
 {
     [Header("References")]
-    [SerializeField] private Inventory inventory;
+    [Tooltip("The kitchen's stock (an Inventory with no limits).")]
+    [SerializeField, FormerlySerializedAs("inventory")] private Inventory storage;
     [SerializeField] private RecipeBook recipes;
 
     [Header("Orders")]
@@ -23,7 +25,7 @@ public class OrderManager : MonoBehaviour
     [SerializeField] private float firstOrderDelay = 1f;
     [SerializeField] private float delayBetweenOrders = 2f;
 
-    public Inventory Inventory => inventory;
+    public Inventory Storage => storage;
     public RecipeBook Recipes => recipes;
 
     public ItemType CurrentOrder { get; private set; } = ItemType.None;
@@ -37,9 +39,9 @@ public class OrderManager : MonoBehaviour
 
     private void Start()
     {
-        if (inventory == null || recipes == null)
+        if (storage == null || recipes == null)
         {
-            Debug.LogError("OrderManager: assign Inventory and Recipe Book.");
+            Debug.LogError("OrderManager: assign Storage (Inventory) and Recipe Book.");
             return;
         }
 
@@ -79,26 +81,28 @@ public class OrderManager : MonoBehaviour
         CurrentOrder = valid[UnityEngine.Random.Range(0, valid.Count)];
         lastOrder = CurrentOrder;
 
-        Debug.Log("NEW ORDER: " + CurrentOrder.DisplayName());
+        GameLog.Info("New order: " + CurrentOrder.DisplayName());
         OrderPlaced?.Invoke(CurrentOrder);
     }
 
     // --------------------------------------------------
-    // COOKING - used by cook(). Makes the next missing step of the current
-    // order (dependencies first). TryCraft logs why it fails.
+    // COOKING - used by cook(). Works on the agent's OWN backpack:
+    // makes the next missing step of the current order (dependencies first).
     // --------------------------------------------------
 
-    public bool TryCraftNextStep(StationType at)
+    public bool TryCraftNextStep(ProgrammableAgent agent, StationType at)
     {
         if (!HasOrder)
         {
-            Debug.LogWarning("cook(): no active order.");
+            GameLog.Warn($"{agent.name}: no active order.");
             return false;
         }
 
-        if (inventory.Has(CurrentOrder))
+        Inventory carried = agent.Backpack;
+
+        if (carried.Has(CurrentOrder))
         {
-            Debug.LogWarning($"{CurrentOrder.DisplayName()} is already made - go serve it.");
+            GameLog.Warn($"{agent.name}: already carrying {CurrentOrder.DisplayName()} - go serve it.");
             return false;
         }
 
@@ -106,38 +110,37 @@ public class OrderManager : MonoBehaviour
 
         foreach (RecipeStep s in steps)
         {
-            // Already have enough of this one - move on to the next step.
-            if (inventory.Has(s.recipe.output, s.times))
+            // Already carrying enough of this one - move on to the next step.
+            if (carried.Has(s.recipe.output, s.times))
                 continue;
 
-            return recipes.TryCraft(inventory, s.recipe.output, at);
+            return recipes.TryCraft(carried, s.recipe.output, at, false, agent.name);
         }
 
         return false;
     }
 
     // --------------------------------------------------
-    // SERVING - used by serve().
+    // SERVING - used by serve(). The dish must be in the agent's backpack.
     // --------------------------------------------------
 
-    // Serve a specific dish. Fails if it isn't the current order or you don't have it.
-    public bool TryServe(ItemType dish)
+    public bool TryServe(ProgrammableAgent agent, ItemType dish)
     {
         if (!HasOrder)
         {
-            Debug.LogWarning("No active order.");
+            GameLog.Warn($"{agent.name}: no active order.");
             return false;
         }
 
         if (dish != CurrentOrder)
         {
-            Debug.LogWarning($"Wrong dish: ordered {CurrentOrder.DisplayName()}, tried to serve {dish.DisplayName()}.");
+            GameLog.Warn($"{agent.name}: wrong dish - ordered {CurrentOrder.DisplayName()}, tried to serve {dish.DisplayName()}.");
             return false;
         }
 
-        if (!inventory.TryRemove(dish, 1))
+        if (!agent.Backpack.TryRemove(dish, 1))
         {
-            Debug.LogWarning($"You don't have a {dish.DisplayName()} to serve.");
+            GameLog.Warn($"{agent.name}: not carrying a {dish.DisplayName()} to serve.");
             return false;
         }
 
@@ -145,7 +148,7 @@ public class OrderManager : MonoBehaviour
         CurrentOrder = ItemType.None;
         CompletedCount++;
 
-        Debug.Log("ORDER SERVED: " + done.DisplayName());
+        GameLog.Info($"{agent.name} served {done.DisplayName()}. Order complete!");
         OrderCompleted?.Invoke(done);
 
         StartCoroutine(PlaceOrderAfter(delayBetweenOrders));
@@ -153,30 +156,34 @@ public class OrderManager : MonoBehaviour
     }
 
     // Serve whatever the current order is (matches the no-argument serve()).
-    public bool TryServeCurrentOrder()
+    public bool TryServeCurrentOrder(ProgrammableAgent agent)
     {
-        return TryServe(CurrentOrder);
+        return TryServe(agent, CurrentOrder);
     }
 
     // --------------------------------------------------
     // TESTING: right-click the OrderManager component header in Play mode.
-    // Adds the raw ingredients, crafts every step, and serves the order.
+    // Puts the raw ingredients in the PLAYER's backpack, crafts every step,
+    // and serves the order.
     // --------------------------------------------------
 
-    [ContextMenu("Debug: Auto-complete current order")]
+    [ContextMenu("Debug: Auto-complete current order (Player)")]
     private void DebugAutoComplete()
     {
         if (!HasOrder) return;
 
+        Player player = FindFirstObjectByType<Player>();
+        if (player == null) return;
+
         recipes.GetPlan(CurrentOrder, out List<RecipeStep> steps, out Dictionary<ItemType, int> raw);
 
         foreach (var kv in raw)
-            inventory.Add(kv.Key, kv.Value);
+            player.Backpack.Add(kv.Key, kv.Value);
 
         foreach (RecipeStep s in steps)
             for (int i = 0; i < s.times; i++)
-                recipes.TryCraft(inventory, s.recipe.output, s.recipe.station, ignoreStation: true);
+                recipes.TryCraft(player.Backpack, s.recipe.output, s.recipe.station, true, player.name);
 
-        TryServeCurrentOrder();
+        TryServeCurrentOrder(player);
     }
 }

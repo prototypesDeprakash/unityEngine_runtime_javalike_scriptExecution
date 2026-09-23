@@ -5,6 +5,8 @@ public class Player : ProgrammableAgent
     // Kept so existing Inspector references/values are not lost.
     [SerializeField] private Renderer playerRenderer;
     [SerializeField] private CodeExecutor codeExecutor;
+    //[SerializeField] private 
+
 
     private void Start()
     {
